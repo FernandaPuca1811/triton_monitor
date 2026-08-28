@@ -2,12 +2,12 @@ import argparse
 import asyncio
 """ from triton_telemetry import { 
     setup_triton_logging,
-    scan_todos_provedores,
+    scan_all_providers,
     parse_timeout,
     parse_cluster_id,
-    ProvTimeoutError,
+    ProviderTimeoutError,
     NetworkPeeringError,
-    CorruptedPayLoadError,
+    CorruptedPayloadError,
     TritonError,
 
 
