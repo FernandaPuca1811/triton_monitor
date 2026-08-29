@@ -9,6 +9,7 @@ from .sanitizer import (
     parse_timeout,
     parse_cluster_id,
 )
+from .logging_engine import setup_triton_logging
 from .core import (
     query_provider_telemetry,
     scan_all_providers,

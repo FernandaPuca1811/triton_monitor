@@ -1,6 +1,7 @@
 import argparse
 import asyncio
-""" from triton_telemetry import { 
+
+from triton_telemetry import (
     setup_triton_logging,
     scan_all_providers,
     parse_timeout,
@@ -8,10 +9,10 @@ import asyncio
     ProviderTimeoutError,
     NetworkPeeringError,
     CorruptedPayloadError,
-    TritonError,
+    TritonError
 
 
-} """
+ )
 
 def build_cli_parser():
 
