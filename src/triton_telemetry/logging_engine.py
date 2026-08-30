@@ -1,16 +1,3 @@
-# src/triton_telemetry/logging_engine.py
-"""
-El corazón de la observabilidad de Tritón.
-
-- AsyncJSONFormatter: formateador JSON forense que expande recursivamente
-  la jerarquía de un ExceptionGroup (excepciones anidadas, causas raíz
-  encadenadas con `from` y notas dinámicas de add_note()).
-- Pipeline no bloqueante: QueueHandler/QueueListener desacoplan la
-  escritura física en disco del event loop de asyncio.
-- Callbacks de rotación (namer/rotator) que comprimen a Gzip los
-  históricos de log en caliente.
-"""
-
 import gzip
 import json
 import logging
@@ -21,45 +8,52 @@ import queue
 import shutil
 from datetime import datetime, timezone
 from typing import Any, Dict
+import httpx
 
-
-# --- Callbacks de compresión en caliente para el RotatingFileHandler -----
+#  Callbacks de compresión en caliente para el RotatingFileHandler
 
 def gzip_namer(name: str) -> str:
     """Modifica el nombre del archivo de backup agregando la extensión .gz."""
     return name + ".gz"
 
-
 def gzip_rotator(source: str, dest: str) -> None:
-    """Comprime el archivo rotado a formato .gz de forma atómica y elimina
-    de forma segura el archivo plano residual del sistema operativo."""
+
     with open(source, "rb") as f_in:
         with gzip.open(dest, "wb", compresslevel=9) as f_out:
             shutil.copyfileobj(f_in, f_out)
     os.remove(source)
 
-
-# --- Formateador JSON forense --------------------------------------------
+# Formateador JSON forense
 
 class AsyncJSONFormatter(logging.Formatter):
-    """
-    Formateador JSON personalizado para telemetría asíncrona.
-    Responsabilidad del Integrante 3: Estandarización de logs, captura de tareas
-    asíncronas y serialización jerárquica avanzada de excepciones.
-    """
 
     def _serialize_exception(self, exc: BaseException) -> Dict[str, Any]:
-        """
-        Función auxiliar recursiva. Procesa la excepción actual, extrae notas dinámicas
-        y desciende recursivamente si encuentra ExceptionGroups o causas raíz ('__cause__').
-        """
-
         # Estructura base de la excepción capturada
         exc_data: Dict[str, Any] = {
             "class": exc.__class__.__name__,
             "message": str(exc),
             "notes": getattr(exc, "__notes__", [])
         }
+
+        # Datos reales de la API httpx que colapsó: si la excepción (en
+        # cualquier nivel de la recursión) es del "árbol genealógico" de
+        # httpx, rescatamos la URL, el método y el código de estado real.
+        if isinstance(exc, httpx.HTTPStatusError):
+            # La petición llegó al servidor, pero la respuesta fue un error
+            # (4xx/5xx). httpx guarda automáticamente request y response.
+            exc_data["httpx_details"] = {
+                "url": str(exc.request.url),
+                "method": exc.request.method,
+                "status_code": exc.response.status_code,
+            }
+        elif isinstance(exc, httpx.RequestError):
+            # La petición ni siquiera llegó a tener respuesta (timeout,
+            # DNS caído, sin conexión). Cubre también TimeoutException,
+            # ConnectError, etc., porque todos heredan de RequestError.
+            exc_data["httpx_details"] = {
+                "url": str(exc.request.url) if exc.request else None,
+                "method": exc.request.method if exc.request else None,
+            }
 
         # Soporte para ExceptionGroup (Python 3.11+): recorrido de múltiples errores concurrentes
         if isinstance(exc, ExceptionGroup):
@@ -115,23 +109,8 @@ class AsyncJSONFormatter(logging.Formatter):
         return json.dumps(log_payload, ensure_ascii=False)
 
 
-# --- QueueHandler que preserva el exc_info real -------------------------
-
+# QueueHandler que preserva el exc_info real
 class ForensicQueueHandler(logging.handlers.QueueHandler):
-    """
-    QueueHandler especializado para telemetría forense.
-
-    El QueueHandler estándar de la librería, en su método `prepare()`,
-    descarta `record.exc_info` y `record.exc_text` tras pre-formatearlos a
-    texto plano. Esto es correcto cuando la cola puede cruzar procesos
-    (multiprocessing.Queue) y el traceback no es picklable, pero en Tritón
-    usamos una `queue.Queue` en memoria dentro del mismo proceso: no hay
-    pickling de por medio, así que descartar exc_info le quita al
-    AsyncJSONFormatter, corriendo en el hilo del QueueListener, el árbol de
-    excepciones real (incluyendo la estructura anidada de ExceptionGroup)
-    que necesita serializar recursivamente.
-    """
-
     def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
         return record
 
@@ -139,19 +118,7 @@ class ForensicQueueHandler(logging.handlers.QueueHandler):
 def wire_non_blocking_pipeline(
     app_logger: logging.Logger,
 ) -> logging.handlers.QueueListener:
-    """
-    Envuelve los handlers "reales" de un logger ya configurado (consola +
-    archivo) en un pipeline no bloqueante QueueHandler/QueueListener, e
-    inyecta los callbacks de compresión Gzip en el RotatingFileHandler.
-
-    Responsabilidad exclusiva del Integrante 4 (Ingeniero de Almacenamiento
-    y Desacoplamiento No Bloqueante). No depende de AsyncJSONFormatter ni
-    de ningún detalle de qué formatea cada handler — solo le importa que
-    existan handlers ya armados para desacoplarlos del hilo/loop principal.
-
-    Devuelve el QueueListener ya arrancado, para que quien llama pueda
-    detenerlo ordenadamente (logger.listener.stop()) al finalizar.
-    """
+    
     # 1) Compresión Gzip en caliente sobre el handler rotativo, si existe.
     file_handler = next(
         (h for h in app_logger.handlers if isinstance(h, logging.handlers.RotatingFileHandler)),
@@ -180,16 +147,8 @@ def wire_non_blocking_pipeline(
 
     return listener
 
-
-# --- Configuración declarativa (Integrante 3 / 5) -------------------------
-
 def setup_triton_logging(log_filename: str = "triton_services.log") -> logging.Logger:
-    """
-    Configura el pipeline de logging mediante dictConfig (formatters y
-    handlers "reales": consola + archivo rotativo) y luego delega en
-    `wire_non_blocking_pipeline` el desacoplamiento no bloqueante
-    (Integrante 4).
-    """
+    
     logging_schema = {
         "version": 1,
         "disable_existing_loggers": False,
