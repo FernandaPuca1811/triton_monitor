@@ -72,10 +72,43 @@ Para ejecutar las pruebas del módulo `core.py`:
 python tests/test_core.py
 ```
 
+---
 
+## Contribución Individual - Integrante 4: Ingeniero de Almacenamiento y Desacoplamiento No Bloqueante
 
+Como **Integrante 4**, asumí la responsabilidad del diseño e implementación del pipeline de persistencia de logs, ubicado en el módulo [`src/triton_telemetry/logging_engine.py`], específicamente la porción de desacoplamiento no bloqueante, rotación y compresión (compartiendo archivo con el formateador JSON del Integrante 3).
 
+A continuación, detallo en profundidad cada uno de los componentes y decisiones técnicas que desarrollé:
 
+---
+
+### 1. Pipeline No Bloqueante (`QueueHandler` + `QueueListener`)
+
+El sistema ejecuta sus consultas HTTP sobre un único hilo (el *event loop* de `asyncio`), por lo que cualquier escritura sincrónica a disco bloquearía la totalidad de las corrutinas de red en curso. Para resolverlo:
+
+* Implementé `ForensicQueueHandler`, un `QueueHandler` que corre en el hilo principal y encola cada `LogRecord` de forma instantánea, sin realizar ninguna escritura física.
+* Configuré un `QueueListener` que corre en un **hilo secundario dedicado**, consumiendo la cola en loop y despachando recién ahí los registros a los *handlers* reales (consola y archivo).
+* Utilicé `queue.Queue`, una estructura *thread-safe*, como canal de comunicación entre ambos hilos, evitando condiciones de carrera.
+
+### 2. Manejador Rotativo Acotado (`RotatingFileHandler`)
+
+Configuré el handler de archivo con `maxBytes=2*1024*1024` (2 MB) y `backupCount=3`, garantizando que el log activo rote automáticamente al alcanzar el límite de tamaño y que el historial de respaldos nunca supere las 3 copias, descartando la más antigua.
+
+### 3. Compresión Gzip en Caliente
+
+Implementé los callbacks `gzip_namer` y `gzip_rotator`, inyectados sobre el `RotatingFileHandler` para interceptar el ciclo de rotación (*rollover*):
+* `gzip_namer` define que el archivo rotado finalice en `.gz`.
+* `gzip_rotator` comprime el contenido con la librería nativa `gzip` y elimina el archivo plano residual únicamente después de confirmar la escritura exitosa del comprimido, evitando pérdida de datos ante fallos intermedios.
+
+### 4. Hallazgo Técnico: Preservación de `exc_info` en la Cola
+
+Durante la validación detecté que `QueueHandler.prepare()`, en su implementación estándar, descarta `record.exc_info` antes de encolar — comportamiento pensado para colas que cruzan procesos (`multiprocessing.Queue`), donde un *traceback* no es serializable. Como en Tritón la cola opera dentro de un mismo proceso, ese descarte no aplica y le rompía al Integrante 3 la posibilidad de construir el árbol recursivo de excepciones en el `QueueListener`. Sobreescribí `prepare()` en `ForensicQueueHandler` para que el registro llegue intacto al otro lado de la cola.
+
+### 5. Ensamblado del Pipeline (`wire_non_blocking_pipeline`)
+
+Centralicé las tres responsabilidades anteriores en una única función, `wire_non_blocking_pipeline(app_logger)`, que recibe un logger ya configurado (con sus *handlers* reales definidos vía `dictConfig`) y lo envuelve: inyecta los callbacks de compresión, arma la cola y el `QueueListener`, y expone un único *handler* no bloqueante hacia el resto de la aplicación. Su ciclo de vida se cierra desde `app_operator.py`, en el bloque `finally`, mediante `listener.stop()`, garantizando el drenaje completo de la cola antes de terminar el proceso.
+
+---
 
 ### Integrante 5: Coordinador de Integración y Flujo CLI (app_operator.py)
 
