@@ -71,3 +71,22 @@ Para ejecutar las pruebas del módulo `core.py`:
 ```bash
 python tests/test_core.py
 ```
+
+
+
+
+
+
+### Integrante 5: Coordinador de Integración y Flujo CLI (app_operator.py)
+
+Responsable de la unificación del sistema de telemetría, el diseño de la interfaz de consola de comandos, el inicio seguro del motor de logging declarativo y la gestión de la concurrencia asíncrona de red ante fallas múltiples.
+
+#### 🛠️ Responsabilidades e Implementaciones Clave:
+* **Punto de Entrada CLI Oficial (app_operator.py)**: Configuración de un analizador declarativo con argparse que inyecta directamente como tipos de datos los validadores del Integrante 1 (parse_cluster_id y parse_timeout). Esto asegura una validación en la frontera del sistema antes de iniciar el bucle de eventos. Cuenta con restricciones estrictas de dominio (choices) para los modos operativos (nominal, debug, emergency) y banderas opcionales de simulación de caos (--chaos).
+* **Configuración Declarativa con dictConfig**: Diseño e inyección estructurada del esquema de configuración del pipeline de logging al arrancar la aplicación.
+* **Captura Quirúrgica mediante except* (Python 3.11+)**: Implementación de la orquestación resiliente ante fallas simultáneas de red de los proveedores HTTP, procesando quirúrgicamente el ExceptionGroup propagado por el TaskGroup del Integrante 2:
+    * except* ProviderTimeoutError as group: Captura los tiempos de espera agotados de los proveedores cloud de la API real y extrae dinámicamente las notas forenses inyectadas con .add_note().
+    * except* NetworkPeeringError as group: Mitiga de manera segura pérdidas físicas de ruteo, DNS o transporte de red.
+    * except* CorruptedPayloadError as group: Maneja formatos no serializables en JSON u otros errores lógicos sin tumbar la ejecución de la consola.
+    * except* TritonError as group: Atrapa errores genéricos del ecosistema de telemetría no catalogados.
+* **Cumplimiento de Estándares de Producción (PEP 765 / Python 3.14)**: Estructuración del bloque de limpieza finally para asegurar el apagado ordenado del listener de hilos del logger. Se eliminó estrictamente cualquier uso de directivas de control de flujo (return, break o continue) en finally para evitar silenciamientos ciegos de excepciones activas y la generación de advertencias del compilador.
