@@ -3,6 +3,43 @@
 ## Descripción General del Proyecto
 **Proyecto Tritón** es un monitor CLI de infraestructura cloud diseñado para evaluar en tiempo real la salud y el rendimiento de clústeres distribuidos en múltiples proveedores (**AWS, Azure y GCP**). El sistema implementa comunicación HTTP asíncrona, orquestación concurrente, manejo quirúrgico de excepciones con grupos (`ExceptionGroup` y `except*`), enriquecimiento forense con `add_note()`, y un pipeline de logging desacoplado y no bloqueante con rotación y compresión Gzip.
 
+## Contribución Individual - Integrante 1: Ingeniero de Robustez de Entradas y Excepciones
+
+Como **Integrante 1**, asumí la responsabilidad de construir la capa base de seguridad, validación de parámetros y el diseño del sistema de excepciones semánticas del proyecto, ubicados en los módulos `src/triton_telemetry/exceptions.py` y `src/triton_telemetry/sanitizer.py`.
+
+A continuación, detallo en profundidad cada uno de los componentes y decisiones técnicas que desarrollé:
+
+---
+
+### 1. Diseño de Excepciones Semánticas (`exceptions.py`)
+
+Para evitar el uso de errores genéricos y proporcionar un sistema de "alarmas" precisas para el dominio de telemetría, diseñé una jerarquía de excepciones personalizadas:
+
+* **Regla de Herencia Estricta (`TritonError`):** Creé la clase base `TritonError` heredando obligatoriamente de la clase estándar `Exception` y nunca de `BaseException`. Esta decisión arquitectónica es crítica para evitar capturar señales de sistema; garantiza que el programa no secuestre eventos vitales del sistema operativo, permitiendo al usuario forzar el cierre de la terminal con el comando `Ctrl+C` si la aplicación se congela.
+
+
+* **Subclases de Dominio:** Implementé tres excepciones específicas para tipificar los fallos de red con precisión quirúrgica:
+
+
+* `ProviderTimeoutError`: Lanzada cuando un proveedor de nube supera el tiempo de espera de red establecido.
+
+
+* `CorruptedPayloadError`: Lanzada ante respuestas con formato corrupto o códigos de estatus HTTP fallidos.
+
+
+* `NetworkPeeringError`: Lanzada para identificar fallos de DNS o problemas de resolución de hosts.
+
+### 2. Validadores de Entrada CLI (`sanitizer.py`)
+
+Actuando como un filtro inicial antes de que el programa procese los datos, desarrollé validadores estrictos para limpiar los argumentos que el usuario ingresa por la terminal:
+
+* **Control del Tiempo de Espera (`parse_timeout`):** Codifiqué una función *callable* que restringe el parámetro `--timeout` exclusivamente a un rango flotante de **0.1 a 5.0 segundos**.
+
+
+* **Salida Limpia del Sistema:** Si el usuario inyecta datos fuera de rango o de un tipo no numérico, el validador intercepta el error y lanza un `argparse.ArgumentTypeError`. Esto evita que la aplicación colapse con un *traceback* desordenado y fuerza a la CLI a salir limpiamente devolviendo un **código de error de sistema 2** (estándar en administración de sistemas).
+
+
+* **Validador de Identificadores de Clúster (`parse_cluster_id`):** Desarrollé un validador mediante expresiones regulares utilizando el módulo `re`. Este mecanismo verifica que el parámetro de clúster opcional siga de forma estricta el patrón `cluster-<region>-<numero>` (por ejemplo, `cluster-us-east-01`), rechazando automáticamente cualquier formato inválido.
 ---
 
 ## Contribución Individual - Integrante 2: Ingeniero de Concurrencia y Telemetría Asíncrona
