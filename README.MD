@@ -151,7 +151,7 @@ Centralicé las tres responsabilidades anteriores en una única función, `wire_
 
 Responsable de la unificación del sistema de telemetría, el diseño de la interfaz de consola de comandos, el inicio seguro del motor de logging declarativo y la gestión de la concurrencia asíncrona de red ante fallas múltiples.
 
-#### 🛠️ Responsabilidades e Implementaciones Clave:
+####  Responsabilidades e Implementaciones Clave:
 * **Punto de Entrada CLI Oficial (app_operator.py)**: Configuración de un analizador declarativo con argparse que inyecta directamente como tipos de datos los validadores del Integrante 1 (parse_cluster_id y parse_timeout). Esto asegura una validación en la frontera del sistema antes de iniciar el bucle de eventos. Cuenta con restricciones estrictas de dominio (choices) para los modos operativos (nominal, debug, emergency) y banderas opcionales de simulación de caos (--chaos).
 * **Configuración Declarativa con dictConfig**: Diseño e inyección estructurada del esquema de configuración del pipeline de logging al arrancar la aplicación.
 * **Captura Quirúrgica mediante except* (Python 3.11+)**: Implementación de la orquestación resiliente ante fallas simultáneas de red de los proveedores HTTP, procesando quirúrgicamente el ExceptionGroup propagado por el TaskGroup del Integrante 2:
@@ -160,3 +160,38 @@ Responsable de la unificación del sistema de telemetría, el diseño de la inte
     * except* CorruptedPayloadError as group: Maneja formatos no serializables en JSON u otros errores lógicos sin tumbar la ejecución de la consola.
     * except* TritonError as group: Atrapa errores genéricos del ecosistema de telemetría no catalogados.
 * **Cumplimiento de Estándares de Producción (PEP 765 / Python 3.14)**: Estructuración del bloque de limpieza finally para asegurar el apagado ordenado del listener de hilos del logger. Se eliminó estrictamente cualquier uso de directivas de control de flujo (return, break o continue) en finally para evitar silenciamientos ciegos de excepciones activas y la generación de advertencias del compilador.
+
+
+## Contribución Individual - Integrante 3: Ingeniero de Formateo Estructurado JSON
+
+Como **Integrante 3**, asumí la responsabilidad del diseño e implementación del formateador de logs estructurados en JSON, ubicado en el módulo [`src/triton_telemetry/logging_engine.py`], específicamente la clase `AsyncJSONFormatter`.
+
+A continuación, detallo en profundidad cada uno de los componentes y decisiones técnicas que desarrollé:
+
+---
+
+### 1. Formateador JSON Forense (`AsyncJSONFormatter`)
+Diseñé `AsyncJSONFormatter` heredando de `logging.Formatter` y sobreescribiendo su método `format(self, record)`, respetando el contrato implícito del módulo `logging` (recibir un `LogRecord`, devolver un `str`). Esto permite que el resto del pipeline de logging (handlers, listeners) trate mi formateador exactamente igual que cualquier `Formatter` estándar, sin necesidad de conocer la lógica JSON interna.
+
+* **Metadatos de telemetría dinámica capturados en cada evento:**
+  * Marca de tiempo estricta en formato **ISO 8601 UTC** (usando `datetime.fromtimestamp(record.created, tz=timezone.utc)`), garantizando coherencia horaria independientemente del huso del servidor.
+  * `process` (PID del sistema operativo) y `threadName` (identificador del hilo).
+  * `taskName`, nativo de `asyncio` en Python 3.12+, para distinguir a qué tarea concurrente (AWS, Azure o GCP) pertenece cada evento cuando corren en simultáneo dentro de un `TaskGroup`.
+  * Metadatos dinámicos inyectados vía el parámetro `extra` de cualquier llamada a `logger`, capturados iterando `record.__dict__` y filtrando los atributos reservados internos de `LogRecord`.
+
+---
+
+### 2. Serialización Recursiva de Excepciones (`_serialize_exception`)
+Implementé un extractor recursivo capaz de reconstruir la jerarquía completa de un incidente, sin truncar ninguna excepción residual del grupo:
+
+1. **Encadenamiento explícito (`raise ... from`):** recorro `exc.__cause__` recursivamente para reconstruir la cadena completa de causalidad entre la excepción semántica de dominio (`ProviderTimeoutError`, `CorruptedPayloadError`, `NetworkPeeringError`) y la excepción nativa de `httpx` que la originó.
+2. **`ExceptionGroup` anidados (Python 3.11+):** cuando múltiples proveedores fallan en simultáneo dentro de un `asyncio.TaskGroup`, recorro `exc.exceptions` y serializo cada sub-excepción de forma independiente y recursiva, preservando la estructura jerárquica completa en un nodo `nested_exceptions`.
+3. **Notas forenses dinámicas (`add_note()`):** extraigo `__notes__` de cada excepción (PEP 678), sin asumir su existencia previa mediante `getattr` con valor por defecto.
+4. **Datos reales de las APIs de `httpx` que colapsaron:** mediante despacho por tipo con `isinstance` contra la jerarquía de excepciones de `httpx` (`HTTPStatusError` vs. `RequestError`), rescato la URL, el método HTTP y el código de estado real de la petición que falló, dejándolos en un nodo `httpx_details` indexable.
+
+---
+
+### 3. Integración con el Pipeline No Bloqueante
+Coordiné con el Integrante 4 la integración de mi formateador dentro del pipeline de `QueueHandler`/`QueueListener`, verificando que el `exc_info` de cada `LogRecord` llegue intacto hasta mi formateador.
+
+---
